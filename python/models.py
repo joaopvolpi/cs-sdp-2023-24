@@ -2,6 +2,8 @@ import pickle
 from abc import abstractmethod
 from gurobipy import Model, GRB
 import gurobipy as gp
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LogisticRegression
 
 import numpy as np
 
@@ -367,12 +369,25 @@ class HeuristicModel(BaseModel):
         """Initialization of the Heuristic Model.
         """
         self.seed = 123
-        self.models = self.instantiate()
+        self.n_clusters = 3
+        self.model_Cluster, self.models_U = self.instantiate()
+        self.seed = 42
+        self.n_init = 1000
+        self.max_iter = 10000
+        self.algorithm = 'elkan'
 
     def instantiate(self):
         """Instantiation of the MIP Variables"""
         # To be completed
-        return
+        model_Cluster = KMeans()
+
+        logitis_models = {}
+
+        for cluster_id in range(self.n_clusters):
+            xgb_modelU = LogisticRegression(max_iter=10000)
+            logitis_models[cluster_id] = xgb_modelU
+    
+        return model_Cluster, logitis_models
 
     def fit(self, X, Y):
         """Estimation of the parameters - To be completed.
@@ -384,8 +399,44 @@ class HeuristicModel(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
-        # To be completed
+
+        D = X - Y
+
+        self.model_Cluster = KMeans(n_clusters=self.n_clusters, random_state=self.seed, n_init=self.n_init, max_iter=self.max_iter, algorithm = self.algorithm) 
+        self.model_Cluster.fit(D)
+
+        cluster_labels = self.model_Cluster.labels_
+        
+        for cluster_id in range(self.n_clusters):
+            # Filter rows for the current cluster
+            X_cluster = X[cluster_labels == cluster_id]
+            Y_cluster = Y[cluster_labels == cluster_id]
+            
+            # Concatenate X_cluster and Y_cluster vertically and create labels
+            V = np.concatenate((X_cluster, Y_cluster), axis=0)
+            labels = np.concatenate((np.ones(len(X_cluster)), np.zeros(len(Y_cluster))))  # 1 for X, 0 for Y
+
+            # Create a random state
+            rng = np.random.default_rng()
+
+            # Create an array of indices and shuffle it
+            indices = np.arange(V.shape[0])
+            rng.shuffle(indices)
+
+            # Use the shuffled indices to shuffle X and Y
+            V = V[indices]
+            labels = labels[indices]        
+
+            # Initialize and train the logistic regression model
+            model = LogisticRegression(max_iter=self.max_iter, random_state=self.seed)
+            model.fit(V, labels)
+                
+            # Store the model and accuracy for the cluster
+            self.models_U[cluster_id] = model
+            
+
         return
+
 
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
@@ -400,8 +451,14 @@ class HeuristicModel(BaseModel):
         np.ndarray:
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
+
+        decision_matrix = np.zeros((X.shape[0], self.n_clusters))
+
+        # Iterate over each cluster and get the decision function values for each sample in X
+        for cluster, model in self.models_U.items():
+            decision_values = model.predict_proba(X)[:, 1] 
+            decision_matrix[:, cluster] = decision_values
+        
         # To be completed
         # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
-        return
-    
-    
+        return decision_matrix
